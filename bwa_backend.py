@@ -549,121 +549,54 @@ def merge_content(state: ReducerState) -> dict:
     return {"merged_md": merged_md}
 
 
-DECIDE_IMAGES_SYSTEM = """You are a technical editor deciding where images would improve a blog post.
-
-RULES:
-- Add 1-3 images maximum. Only add an image if it genuinely helps explain a concept.
-- Good image candidates: architecture diagrams, flowcharts, comparison tables, real-world screenshots.
-- BAD image candidates: decorative images, stock photos that don't relate to the content.
-- Place [[IMAGE_N]] placeholders on their own line, immediately AFTER the heading or paragraph where the image adds value.
-- Each image needs: a clear filename, alt text, caption, and a "prompt" field with SEARCH KEYWORDS (2-5 words) to find a relevant image on stock photo sites (e.g. "cloud architecture diagram", "server monitoring dashboard", "python code terminal").
-- The "prompt" field is used for IMAGE SEARCH, not AI generation. Use short, specific keywords.
-- Size: use "1024x1024" for diagrams, "1536x1024" for wide charts/flowcharts.
-- If the blog is purely text-based (opinion piece, news roundup), set images=[] and return the text unchanged.
-
-OUTPUT: Return GlobalImagePlan with md_with_placeholders (the blog with [[IMAGE_N]] inserted) and images list.
-"""
-
-def _strip_images_from_md(md: str) -> str:
-    """Remove markdown image syntax from text so LLMs don't interpret it as image input."""
-    return re.sub(r"!\[[^\]]*\]\([^)]+\)", "", md).strip()
-
-
 def decide_images(state: ReducerState) -> dict:
     merged_md = state["merged_md"]
     plan = state["plan"]
+    topic = state["topic"]
     assert plan is not None
 
-    clean_md = _strip_images_from_md(merged_md)
-    if len(clean_md) > 24000:
-        clean_md = clean_md[:24000]
+    lines = merged_md.split('\n')
+    modified_lines = []
+    placeholder_inserted = 0
+    h2_count = 0
 
-    try:
-        planner = llm.with_structured_output(GlobalImagePlan)
-        image_plan = planner.invoke(
-            [
-                SystemMessage(content=DECIDE_IMAGES_SYSTEM),
-                HumanMessage(
-                    content=(
-                        f"Blog kind: {plan.blog_kind}\n"
-                        f"Topic: {state['topic']}\n\n"
-                        "Insert placeholders + propose image prompts.\n\n"
-                        f"{clean_md}"
-                    )
-                ),
-            ]
-        )
-        return {
-            "md_with_placeholders": image_plan.md_with_placeholders,
-            "image_specs": [img.model_dump() for img in image_plan.images],
-        }
-    except Exception as e:
-        log.debug("Groq failed in decide_images: %s", e)
+    for line in lines:
+        modified_lines.append(line)
+        if line.startswith('## '):
+            h2_count += 1
+            if h2_count in (2, 4) and placeholder_inserted < 2:
+                placeholder_num = placeholder_inserted + 1
+                modified_lines.append(f"\n[[IMAGE_{placeholder_num}]]\n")
+                placeholder_inserted += 1
 
-    try:
-        planner = llm_fallback.with_structured_output(GlobalImagePlan)
-        image_plan = planner.invoke(
-            [
-                SystemMessage(content=DECIDE_IMAGES_SYSTEM),
-                HumanMessage(
-                    content=(
-                        f"Blog kind: {plan.blog_kind}\n"
-                        f"Topic: {state['topic']}\n\n"
-                        "Insert placeholders + propose image prompts.\n\n"
-                        f"{clean_md}"
-                    )
-                ),
-            ]
-        )
-        return {
-            "md_with_placeholders": image_plan.md_with_placeholders,
-            "image_specs": [img.model_dump() for img in image_plan.images],
-        }
-    except Exception as e2:
-        log.debug("Mistral failed in decide_images: %s", e2)
-        topic = state['topic']
+    md_with_placeholders = '\n'.join(modified_lines)
 
-        lines = merged_md.split('\n')
-        modified_lines = []
-        placeholder_inserted = 0
-        h2_count = 0
+    image_specs = []
+    if placeholder_inserted >= 1:
+        image_specs.append({
+            "placeholder": "[[IMAGE_1]]",
+            "filename": f"{_safe_slug(topic)}_overview.jpg",
+            "alt": f"Overview of {topic}",
+            "caption": f"A visual overview of {topic}",
+            "prompt": f"{topic} technology overview",
+            "size": "1024x1024",
+            "quality": "medium"
+        })
+    if placeholder_inserted >= 2:
+        image_specs.append({
+            "placeholder": "[[IMAGE_2]]",
+            "filename": f"{_safe_slug(topic)}_details.jpg",
+            "alt": f"Key details of {topic}",
+            "caption": f"Deep dive into {topic}",
+            "prompt": f"{topic} diagram explanation",
+            "size": "1024x1024",
+            "quality": "medium"
+        })
 
-        for line in lines:
-            modified_lines.append(line)
-            if line.startswith('## '):
-                h2_count += 1
-                if h2_count in (2, 4) and placeholder_inserted < 2:
-                    placeholder_num = placeholder_inserted + 1
-                    modified_lines.append(f"\n[[IMAGE_{placeholder_num}]]\n")
-                    placeholder_inserted += 1
-
-        md_with_placeholders = '\n'.join(modified_lines)
-
-        fallback_image_specs = [
-                {
-                    "placeholder": "[[IMAGE_1]]",
-                    "filename": f"{_safe_slug(topic)}_overview.jpg",
-                    "alt": f"Overview of {topic}",
-                    "caption": f"A visual overview of {topic}",
-                    "prompt": f"{topic} technology overview",
-                    "size": "1024x1024",
-                    "quality": "medium"
-                },
-                {
-                    "placeholder": "[[IMAGE_2]]",
-                    "filename": f"{_safe_slug(topic)}_details.jpg",
-                    "alt": f"Key details of {topic}",
-                    "caption": f"Deep dive into {topic}",
-                    "prompt": f"{topic} diagram explanation",
-                    "size": "1024x1024",
-                    "quality": "medium"
-                }
-            ]
-
-        return {
-            "md_with_placeholders": md_with_placeholders,
-            "image_specs": fallback_image_specs,
-        }
+    return {
+        "md_with_placeholders": md_with_placeholders,
+        "image_specs": image_specs,
+    }
 
 
 def _search_and_fetch_image(query: str) -> bytes:
