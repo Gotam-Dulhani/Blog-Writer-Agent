@@ -51,7 +51,7 @@ PEXELS_API_KEY=...          # optional, for better images
 ```
 
 ```bash
-streamlit run bwa_frontend.py
+streamlit run blog-writing-agent-frontend.py
 ```
 
 ## Example Output

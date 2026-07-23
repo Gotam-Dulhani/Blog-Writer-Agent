@@ -10,7 +10,8 @@ from typing import Any, Dict, Optional, List, Iterator, Tuple
 
 import streamlit as st
 
-from bwa_backend import app
+import importlib
+app = importlib.import_module("blog-writing-agent-backend").app
 
 # -----------------------------
 # Custom CSS
